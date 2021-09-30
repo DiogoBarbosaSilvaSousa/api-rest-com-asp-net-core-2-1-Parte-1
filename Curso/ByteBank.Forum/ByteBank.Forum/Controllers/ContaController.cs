@@ -2,6 +2,7 @@
 using ByteBank.Forum.ViewModels;
 using Microsoft.AspNet.Identity;
 using Microsoft.AspNet.Identity.EntityFramework;
+using Microsoft.AspNet.Identity.Owin;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,6 +14,25 @@ namespace ByteBank.Forum.Controllers
 {
     public class ContaController : Controller
     {
+        private UserManager<UsuarioAplicacao> _userManager;
+        public UserManager<UsuarioAplicacao> UserManager
+        {
+            get
+            {
+                if (_userManager == null)
+                {
+                    var contextOwin = HttpContext.GetOwinContext();
+                    _userManager = contextOwin.GetUserManager<UserManager<UsuarioAplicacao>>();
+                }
+                return _userManager;
+            }
+
+            set
+            {
+                _userManager = value;
+            }
+        }
+
         public ActionResult Registrar()
         {
             return View();
@@ -21,11 +41,8 @@ namespace ByteBank.Forum.Controllers
         [HttpPost]
         public async Task<ActionResult> Registrar(ContaRegistrarViewModel modelo)
         {
-            if(ModelState.IsValid)
+            if (ModelState.IsValid)
             {
-                var dbContext = new IdentityDbContext<UsuarioAplicacao>("DefaultConnection");
-                var userStore = new UserStore<UsuarioAplicacao>(dbContext);
-                var userManager = new UserManager<UsuarioAplicacao>(userStore);
 
                 var novoUsuario = new UsuarioAplicacao();
 
@@ -33,14 +50,84 @@ namespace ByteBank.Forum.Controllers
                 novoUsuario.UserName = modelo.UserName;
                 novoUsuario.NomeCompleto = modelo.NomeCompleto;
 
-                await userManager.CreateAsync(novoUsuario, modelo.Senha);
+                var usuario = await UserManager.FindByEmailAsync(modelo.Email);
+                var usuarioJaExiste = usuario != null;
 
-                // Podemos incluir o usuário
-                return RedirectToAction("Index", "Home");
+                if (usuarioJaExiste)
+                {
+                    //return RedirectToAction("Index", "Home");
+                    return View("AguardandoConfirmacao");
+                }
+
+                var resultado = await UserManager.CreateAsync(novoUsuario, modelo.Senha);
+
+                if (resultado.Succeeded)
+                {
+                    // Podemos incluir o usuário
+
+                    // Enviar o email de confirmação
+                    await EnviarEmailDeConfirmacaoAsync(novoUsuario);
+
+                    // return RedirectToAction("Index", "Home");
+                    return View("AguardandoConfirmacao");
+                }
+                else
+                {
+                    AdicionaErros(resultado);
+                }
+
             }
 
             // Alguma coisa de errado aconteceu!
             return View(modelo);
+        }
+
+        private async Task EnviarEmailDeConfirmacaoAsync(UsuarioAplicacao usuario)
+        {
+            var token = await UserManager.GenerateEmailConfirmationTokenAsync(usuario.Id);
+
+            var linkDeCallback =
+                Url.Action(
+                    "ConfirmacaoEmail",
+                    "Conta",
+                    new { usuarioId = usuario.Id, token = token },
+                    Request.Url.Scheme);
+
+            await UserManager.SendEmailAsync(
+                usuario.Id,
+                "Fórum ByteBank - Confirmação de Email",
+                $"Bem vindo ao fórum ByteBank, clique aqui {linkDeCallback} para confirmar seu email!");
+        }
+
+        public async Task<ActionResult> ConfirmacaoEmail(string usuarioId, string token)
+        {
+            if (usuarioId == null || token == null)
+            {
+                return View("Error");
+            }
+
+            var resultado = await UserManager.ConfirmEmailAsync(usuarioId, token);
+
+            if (resultado.Succeeded)
+            {
+                return RedirectToAction("Index", "Home");
+            }
+            else
+            {
+                return View("Error");
+            }
+
+            throw new NotImplementedException();
+        }
+
+        private void AdicionaErros(IdentityResult resultado)
+        {
+            //throw new NotImplementedException();
+
+            foreach (var erro in resultado.Errors)
+            {
+                ModelState.AddModelError("", erro);
+            }
         }
     }
 }
